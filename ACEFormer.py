@@ -21,18 +21,30 @@ class AllData:
         dataframe = source_data
         self.true_train_set,self.true_verify_set,self.true_test_set = [], [], []
         self.former_train_set,self.former_verify_set,self.former_test_set = [], [], []
-
+        print(f"开始初始化AllData类...")
+        print('source_data',source_data)
+        print('verify_size',verify_size)
+        print('test_size',test_size)
+        print('unit_size',unit_size)
+        print('predict_size',predict_size)
+        print('emd_col',emd_col)
+        print('result_col',result_col)
+        print('data_type',data_type)
+        print('emd_type',emd_type)
+        print('back_num',back_num)
         split_index = - back_num * test_size - verify_size - 1
         train_tmp = dataframe.iloc[:split_index].reset_index(drop=True)
+        # print(train_tmp)
         self.true_train_set.append(train_tmp)
         self.former_train_set.append(data_type(train_tmp, unit_size, predict_size, emd_col=emd_col, result_col=result_col, emd_type=emd_type))
+        print(self.former_train_set)
 
         for _ in range(back_num):
             # train data
             train_tmp = dataframe.iloc[split_index-unit_size+predict_size: split_index+test_size if split_index<-test_size else -1].reset_index(drop=True)
             self.true_train_set.append(train_tmp)
             self.former_train_set.append(data_type(train_tmp, unit_size, predict_size, emd_col=emd_col, result_col=result_col, emd_type=emd_type))
-
+            # print('train_tmp', train_tmp)
             # verify data
             split_index += verify_size
             verify_tmp = dataframe.iloc[split_index-verify_size-unit_size+predict_size: split_index].reset_index(drop=True)
@@ -74,9 +86,15 @@ class ACEFormer(nn.Module):
         ## distillation mechanism
         self.dis_attn = nn.ModuleList()
         self.distill = nn.ModuleList()
+        self.hidden_local = nn.ModuleList()  # 添加这一行
         ## create distillation module
         for num in range(dis_layer):
+            print(num)
             embed_tmp = embed_dim // pow(2, num)
+            # self.temporal.append(nn.Linear(unit_size, embed_tmp//2))#将输入特征从 unit_size 维度映射到 embed_tmp 维度
+            self.temporal.append(nn.Linear(unit_size, embed_tmp ))  # 将输入特征从 unit_size 维度映射到 embed_tmp 维度
+            print('unit_size', unit_size)
+            print('embed_tmp',embed_tmp // 2)
             self.dis_attn.append(
                 CrossLayer(
                     ProbabilityAttention(embed_tmp, n_heads=8, factor=factor),
@@ -85,8 +103,10 @@ class ACEFormer(nn.Module):
                 )
             )
             self.distill.append(Distilling(embed_tmp))
+            print('unit_size',unit_size)
+            print('embed_tmp // 2', embed_tmp // 2)
             self.hidden_local.append(nn.Linear(unit_size, embed_tmp // 2))
-
+        print('attention module')
         # attention module
         self.attn = nn.ModuleList(
             CrossLayer(
@@ -98,7 +118,7 @@ class ACEFormer(nn.Module):
 
         # projection
         self.full_connect = nn.Linear(embed_tmp // 2, 1, bias=True)
-
+        print('self.full_connect')
     def forward(self, data: torch.tensor):
         # data embedding
         data_emb = self.ExpandConv(data)
@@ -109,10 +129,15 @@ class ACEFormer(nn.Module):
         # distilling module
         for i in range(self.dis_layer):
             attn_res = self.dis_attn[i](dis_output, dis_output)
+            print('attn_res 的维度:', attn_res.size())
             dis_res = self.distill[i](attn_res)
-            hid_res = self.temporal[i](dis_output)
-            dis_output = dis_res + hid_res
-        
+            print('dis_res_distill',dis_res.size())
+
+            # hid_res = self.temporal[i](dis_output)
+            # hid_res = hid_res.view(hid_res.size(0), hid_res.size(1), 32)  # 将 hid_res 的第三个维度调整为 32
+            # print('hid_res_temporal', hid_res.size())
+            # dis_output = dis_res + hid_res
+            dis_output = dis_res
         # attention dealt
         attn_output = dis_output
         for layer in self.attn:
@@ -123,9 +148,10 @@ class ACEFormer(nn.Module):
 
         return output
 
-def train(model, train_data: Data.Dataset, batch_size: int, device: str = "cpu", iteration: int = 2000):
+def train(model, train_data: Data.Dataset, batch_size: int, device: str = "cpu", iteration: int = 50):#2000改50
     # data to DataLoader
     train_loader = Data.DataLoader(train_data, batch_size)
+    print(train_loader)
     # loss and optimizer
     criterion = nn.MSELoss()
     optimizer = opt.Adam(model.parameters(), lr=0.001)
@@ -133,6 +159,7 @@ def train(model, train_data: Data.Dataset, batch_size: int, device: str = "cpu",
     # trainning model
     model.train()
     start = time.time()
+    print('训练开始时间',start)
     for epoch in range(iteration):
         ## calculate the loss
         batch_count, loss_count = 0, 0.0
@@ -140,7 +167,8 @@ def train(model, train_data: Data.Dataset, batch_size: int, device: str = "cpu",
         for data, _, true_data in train_loader:
             data = data.float().to(device)
             true_data = true_data.float().to(device)
-
+            # 在将数据传递给模型之前，打印数据的维度
+            print("数据维度：", data.size())
             outputs = model(data)
             loss = criterion(outputs, true_data)
             loss_count += loss.cpu().data
@@ -149,6 +177,7 @@ def train(model, train_data: Data.Dataset, batch_size: int, device: str = "cpu",
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            print('训练轮数',epoch)
 
         if epoch % 100 == 0:
             end = time.time()
@@ -166,7 +195,8 @@ def test(model, test_data: EmdData, predict_size: int, device: str):
             stamp = torch.tensor(stamp).unsqueeze(0).int().to(device)
 
             true.append(true_data[-predict_size])
-            outputs, _, _ = model(data, stamp)
+            # outputs, _, _ = model(data, stamp)#原来的
+            outputs = model(data)
             predict.append(outputs.reshape(-1)[-predict_size:].tolist())
 
     true, predict = test_data.anti_normalize_data(np.array(true), np.array(predict))
@@ -178,16 +208,24 @@ def run_model(source_data: pd.DataFrame, index: int, device: str, backtest_num: 
     batch_size = 64
     emd_col = ['close', 'close_x', 'close_y', 'vol', 'vol_x', 'vol_y']
     result_col = ['close']
-
+    # print(result_col)
+    print('emd_col',emd_col)
+    print('result_col', result_col)
+    print('backtest_num', backtest_num)
+    print('EmdData', EmdData)
     start_time = time.time()
     # product dataset for model
-    data_set = AllData(source_data=source_data, verify_size=50, test_size=100, unit_size=30, predict_size=5, emd_col=emd_col, result_col=result_col, back_num=backtest_num, data_type=EmdData)
+    data_set = AllData(source_data=source_data, verify_size=50, test_size=100, unit_size=64, predict_size=5, emd_col=emd_col, result_col=result_col, back_num=backtest_num, data_type=EmdData)
+    print('print(data_set)')
+    print(data_set)
     former_train_set, former_verify_set, former_test_set = data_set.get_data()
     true_train_set, true_verify_set, true_test_set = data_set.get_not_normaliza_data()
 
     # create model
     print("create model")
-    model = ACEFormer(data_dim=len(emd_col), embed_dim=64, forward_dim=256, unit_size=30, dis_layer=3, attn_layer=2, dropout=0.1, factor=5).to(device)
+    # model = ACEFormer(data_dim=len(emd_col), embed_dim=64, forward_dim=256, unit_size=32, dis_layer=2, attn_layer=2, dropout=0.1, factor=5).to(device)
+    model = ACEFormer(data_dim=len(emd_col), embed_dim=64, forward_dim=256, unit_size=64, dis_layer=3, attn_layer=2,
+                      dropout=0.1, factor=5).to(device)
 
     train_true_set, train_predict_set = [], []
     verify_true_set, verify_predict_set = [], []
@@ -229,26 +267,36 @@ if __name__ == "__main__":
     print('script name : ', sys.argv[0])
     # process and GPU use
     dev = sys.argv[1]
+    print('dev:',dev)
     # experiment times for each data
     model_time = int(sys.argv[2])
+    print('model_time:',model_time)
     # path for save predict result
     result_save = sys.argv[3]
     # data file
     data_path = sys.argv[4]
     # the number of the dataset splits
     back_num = int(sys.argv[5])
+    print('back_num:', back_num)
     # iteration number
     itera_num = int(sys.argv[6])
+    print('训练轮数:', itera_num)
     # path of save result
     result_path = result_save + "result_set_" + data_path[10:-4] + "_{}.npy"
+    print('result_path',result_path)
 
-    # multiplt processing
-    pool = multiprocessing.Pool(model_time)
-    source_data = pd.read_csv(data_path)
+    # # multiplt processing
+    # pool = multiprocessing.Pool(model_time)
+    # print(model_time)
+    # source_data = pd.read_csv(data_path)
+    # # print(source_data)
+    # for model_i in range(1, model_time + 1):
+    #     pool.apply_async(run_model, (source_data, model_i, dev, back_num, itera_num, result_path))
+    #
+    # pool.close()
+    # pool.join()
+
+    source_data = pd.read_csv(data_path)  # 如果需要，可以读取数据
     for model_i in range(1, model_time + 1):
-        pool.apply_async(run_model, (source_data, model_i, dev, back_num, itera_num, result_path))
-
-    pool.close()
-    pool.join()
-    
+        run_model(source_data, model_i, dev, back_num, itera_num, result_path)
     print("Finish training all experment models.")

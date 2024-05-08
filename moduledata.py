@@ -52,6 +52,8 @@ class EMD_dealt:
                         up_list.append(up)
                         down_list.append(down)
                 # denoise
+                # print("up_list:", up_list)
+                # print("down_list:", down_list)
                 emd_tmp.append((np.array(up_list).mean(axis=0) + np.array(down_list).mean(axis=0)) / 2)
             emd_result.append(np.array(emd_tmp).T)
         self.emd_result = np.array(emd_result)

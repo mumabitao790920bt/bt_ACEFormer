@@ -5,6 +5,18 @@ from scipy import interpolate
 from scipy.signal import argrelextrema
 
 # correlation points of upper and lower envelope
+def snr(data, noise):
+    """
+    Signal-to-Noise Ratio (SNR) 方法的实现
+    :param data: 信号数据
+    :param noise: 噪声数据
+    :return: SNR 值
+    """
+    signal_power = np.sum(data ** 2)  # 信号功率
+    noise_power = np.sum(noise ** 2)  # 噪声功率
+    snr_value = 10 * np.log10(signal_power / noise_power)  # 计算 SNR 值
+    return snr_value
+
 def max_min_peaks(data, point_type:str = "emd"):
     assert(point_type in ["emd", "ext", "mid"])
     emd_id = {"emd": 1, "ext": 2, "mid": 3}
